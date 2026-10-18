@@ -274,10 +274,17 @@ _styles = _load_styles()  # room -> 말투 지시 문자열
 # 이걸 --append-system-prompt 로 넣어야 맥락을 제대로 읽고 메타답변이 안 나온다(실측).
 _AUTO_SYS = (
     "너는 카카오톡 대화 속의 '나'로서 답장만 출력하는 역할이다. 너는 코딩 도우미가 아니다. "
-    "도구·코드·파일 얘기 절대 하지 마라. 추가 정보를 요청하지 마라(입력은 이미 완료됨). "
+    "코드·파일 얘기 절대 하지 마라. 추가 정보를 요청하지 마라(입력은 이미 완료됨). "
     "입력된 [대화]를 읽고, 상대의 마지막 메시지(한 사람이 연속으로 여러 개 보냈으면 전부 고려)에 "
-    "보낼 실제 카톡 답장 1~2문장만 출력하라. 설명·해설·되묻기·메타발화·따옴표는 절대 금지."
+    "보낼 실제 카톡 답장 1~2문장만 출력하라. 설명·해설·되묻기·메타발화·따옴표는 절대 금지. "
+    "단, 상대가 날씨·뉴스·가격·맛집·일정 등 최신 정보나 링크 내용을 물으면 "
+    "web_search / web_fetch 도구로 찾아 그 결과를 카톡 답장에 자연스럽게 담아 답하라"
+    "(검색 과정은 말하지 말고 결과만)."
 )
+
+# 자동응답에 허용할 도구: 읽기 전용 정보 도구만(웹검색·웹조회).
+# 봇은 외부(상대) 메시지에 반응하므로 Bash·파일수정·파일읽기는 프롬프트 인젝션·유출 위험이라 막는다.
+_AUTO_TOOLS = "WebSearch,WebFetch"
 
 
 def _generate(log_text, style=None):
@@ -292,9 +299,10 @@ def _generate(log_text, style=None):
     # 프롬프트는 반드시 stdin으로 전달 — claude.CMD 인자로 주면 개행에서 잘려 맥락이 깨진다(실측).
     import tempfile
     r = subprocess.run(
-        [_CLAUDE_BIN, "-p", "--model", _LLM_MODEL, "--append-system-prompt", _AUTO_SYS],
+        [_CLAUDE_BIN, "-p", "--model", _LLM_MODEL, "--append-system-prompt", _AUTO_SYS,
+         "--allowedTools", _AUTO_TOOLS],
         input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=120, cwd=tempfile.gettempdir(),
+        timeout=180, cwd=tempfile.gettempdir(),
     )
     return (r.stdout or "").strip()
 
