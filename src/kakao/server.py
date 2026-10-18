@@ -368,7 +368,15 @@ def _auto_loop(room, stop, style=None):
         except Exception as e:
             print("[auto] LLM 실패:", e, flush=True)
             continue
-        if reply and reply.strip().upper() != "SKIP":   # SKIP이면 봇이 답 안 함(사용자가 직접)
+        r = (reply or "").strip()
+        if r.upper() == "SKIP":
+            # 봇이 답하면 안 되는 사안(돈·중요 결정 등) → 답 안 하고 '나와의 채팅'으로 알림
+            last = incoming[-1][2] if incoming else ""
+            try:
+                send(MY_NAME, f"[확인 요망] '{room}' 방에 직접 답할 메시지가 있어요: {last[:60]}")
+            except Exception as e:
+                print("[auto] 알림 실패:", e, flush=True)
+        elif r:
             try:
                 send(room, reply)
             except Exception as e:
