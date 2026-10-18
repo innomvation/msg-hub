@@ -395,13 +395,41 @@ def _save_profiles():
         pass
 
 
-def _learn_style(room):
-    """그 방에서 내가 보낸 메시지를 claude로 분석해 말투 프로파일을 만들어 저장한다."""
-    ex = _my_style_examples(room, n=40)
+# 관계 그룹: 같은 그룹 방들은 하나의 말투로 묶어 학습. 지정 안 한 방은 '기본'(호연 대화) 사용.
+_GROUPS = {
+    "친구": ["101", "공익인데 현역감", "비올라", "코그모", "무빙규"],
+    "사장": ["고려포차 사장 형"],
+    "여자": ["슬기로은 교사생활", "서연"],
+    "지인": ["E-ho"],
+}
+_BASE_SOURCE = "호연"   # 지정 안 한 방들의 기본 말투 소스
+
+
+def _room_group(room):
+    for g, rs in _GROUPS.items():
+        if room in rs:
+            return g
+    return "기본"
+
+
+def _profile_for(room):
+    """자동응답에 쓸 말투 프로파일: 방 개별 > 그룹 > 기본 순."""
+    return _profiles.get(room) or _profiles.get(_room_group(room)) or _profiles.get("기본")
+
+
+def _learn_style(rooms, label=None):
+    """한 방 또는 여러 방의 내 메시지를 claude로 분석해 말투 프로파일을 만들어 저장한다.
+    rooms: 방 이름(str) 또는 방 이름 리스트. label: 저장 키(기본은 첫 방 이름)."""
+    if isinstance(rooms, str):
+        rooms = [rooms]
+    ex = []
+    for rm in rooms:
+        ex += _my_style_examples(rm, n=30)
     if len(ex) < 3:
         return None
+    key = label or rooms[0]
     prompt = (
-        "아래는 한 사람이 '" + room + "' 카카오톡 방에서 실제로 보낸 메시지들이야. "
+        "아래는 한 사람이 카카오톡에서 실제로 보낸 메시지들이야. "
         "이 사람의 말투를 다른 사람이 똑같이 흉내 낼 수 있게 핵심 특징만 지침으로 정리해줘. "
         "꼭 포함: 존댓말/반말, 자주 쓰는 어미·호칭, 줄임말, 이모티콘·ㅋㅋ 습관, 말버릇. "
         "서론·설명 없이 3~5줄 지침만 출력.\n\n" + "\n".join("- " + e for e in ex)
@@ -414,7 +442,7 @@ def _learn_style(room):
     )
     prof = (r.stdout or "").strip()
     if prof:
-        _profiles[room] = prof
+        _profiles[key] = prof
         _save_profiles()
     return prof
 
@@ -448,8 +476,8 @@ def _generate(log_text, style=None, examples=None, profile=None):
 
 
 def _auto_loop(room, stop, style=None):
-    examples = _my_style_examples(room)   # 이 방에서 내가 쓰던 말투(방마다 다름) 학습용
-    profile = _profiles.get(room)          # 미리 학습해둔 말투 프로파일(있으면)
+    examples = _my_style_examples(room) or _my_style_examples(_BASE_SOURCE)  # 그 방 예시 없으면 호연 예시
+    profile = _profile_for(room)           # 방 개별 > 그룹 > 기본(호연) 순 말투 프로파일
     try:
         with _lock:
             seen = set(kakao_lib.read_room(room, open_if_needed=False).splitlines())
