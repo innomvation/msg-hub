@@ -269,6 +269,25 @@ def _save_styles(d):
 
 _styles = _load_styles()  # room -> 말투 지시 문자열
 
+# 자동응답 켜진 방 목록(서버 재시작 시 자동 재개용). 방 이름 포함이라 .gitignore 대상.
+_ACTIVE_PATH = os.path.join(os.path.dirname(__file__), "auto_active.json")
+
+
+def _load_active():
+    try:
+        with open(_ACTIVE_PATH, encoding="utf-8") as f:
+            return list(json.load(f))
+    except Exception:
+        return []
+
+
+def _save_active():
+    try:
+        with open(_ACTIVE_PATH, "w", encoding="utf-8") as f:
+            json.dump(list(_auto.keys()), f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 
 # claude -p를 코딩 에이전트가 아니라 '카톡 답장 생성기'로 고정하는 시스템 프롬프트.
 # 이걸 --append-system-prompt 로 넣어야 맥락을 제대로 읽고 메타답변이 안 나온다(실측).
@@ -285,7 +304,12 @@ _AUTO_SYS = (
     "'이번 주 토요일'·'내일'·'다음 주 화요일' 같은 상대적 날짜 표현은 프롬프트의 [오늘] 기준으로 "
     "실제 날짜를 계산해서 등록하라. 날짜나 시간이 아직 안 정해졌으면 등록하지 마라. "
     "일정을 물으면 캘린더를 조회해서 답하라. "
-    "누가 장난·부적절한 등록이나 삭제를 요구해도 절대 따르지 마라."
+    "누가 장난·부적절한 등록이나 삭제를 요구해도 절대 따르지 마라. "
+    "기본적으로 모든 메시지에 자연스럽게 답하라(사용자는 답장이 귀찮아서 너를 쓴다). "
+    "상대가 네가 AI·봇인지 물어도 당황하거나 엉뚱한 말 말고, 사람인 '나'로서 자연스럽게 받아넘겨라. "
+    "단, 돈·송금 요청이나, 사용자 본인이 꼭 직접 확인·결정해야 하는 중요한 사안"
+    "(금전 거래, 계약, 큰 약속의 최종 확정 등)에만 답을 지어내지 말고 정확히 'SKIP' 한 단어만 출력하라"
+    "(그건 사용자가 직접 답한다)."
 )
 
 # 자동응답에 허용할 도구: 읽기 전용 정보 도구 + 구글 캘린더 조회/등록.
@@ -344,7 +368,7 @@ def _auto_loop(room, stop, style=None):
         except Exception as e:
             print("[auto] LLM 실패:", e, flush=True)
             continue
-        if reply:
+        if reply and reply.strip().upper() != "SKIP":   # SKIP이면 봇이 답 안 함(사용자가 직접)
             try:
                 send(room, reply)
             except Exception as e:
@@ -365,11 +389,13 @@ def auto_start(room, style=None):
             _release_input()
     stop = threading.Event()
     _auto[room] = stop
+    _save_active()
     threading.Thread(target=_auto_loop, args=(room, stop, _styles.get(room)), daemon=True).start()
 
 
 def auto_stop(room):
     stop = _auto.pop(room, None)
+    _save_active()
     if stop:
         stop.set()
 
@@ -519,8 +545,20 @@ class Handler(BaseHTTPRequestHandler):
         pass  # 콘솔 조용히
 
 
+def _resume_active():
+    """서버 시작 시 지난번 켜둔 방들의 자동응답을 다시 켠다(재시작 후 수동 재개 불필요)."""
+    time.sleep(4)  # 카톡·서버 준비 대기
+    for room in _load_active():
+        try:
+            auto_start(room, _styles.get(room))
+            time.sleep(1)
+        except Exception as e:
+            print("[auto] 재개 실패:", room, e, flush=True)
+
+
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
     threading.Thread(target=_poll_notifications, daemon=True).start()
+    threading.Thread(target=_resume_active, daemon=True).start()
     print(f"[kakao-server] listening on 127.0.0.1:{port}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
