@@ -284,7 +284,10 @@ def _generate(log_text, style=None):
     msgs = [LINE_RE.match(l).groups() for l in log_text.splitlines() if LINE_RE.match(l)]
     convo = "\n".join(f"{s}: {m}" for s, _t, m in msgs[-15:])
     tone = ("[말투: " + style + "]") if style else "[말투: 상대와의 관계에 맞춰 자연스럽게]"
-    prompt = "[대화]\n" + convo + "\n" + tone + "\n[나의 답장]:"
+    # 그룹방 호칭 혼동 방지: 방금 메시지를 보낸 사람(내가 아닌 마지막 발신자)을 명시한다.
+    last_sender = next((s for s, _t, _m in reversed(msgs) if s != MY_NAME), None)
+    who = ("[방금 '" + last_sender + "'가 보낸 메시지에 답하는 거야. 그 사람에게 맞는 호칭을 써]\n") if last_sender else ""
+    prompt = "[대화]\n" + convo + "\n" + tone + "\n" + who + "[나의 답장]:"
     # Claude Code 구독 인증 사용(별도 API 키 불필요). 프로젝트 설정 로드를 피하려 임시 폴더에서 실행.
     # 프롬프트는 반드시 stdin으로 전달 — claude.CMD 인자로 주면 개행에서 잘려 맥락이 깨진다(실측).
     import tempfile
