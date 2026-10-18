@@ -269,6 +269,31 @@ def _save_styles(d):
 
 _styles = _load_styles()  # room -> 말투 지시 문자열
 
+# 봇이 자동응답으로 보낸 답 기록(방별). few-shot 말투 예시에서 제외해 자기 답을 되배우는 순환을 막는다.
+_BOTSENT_PATH = os.path.join(os.path.dirname(__file__), "bot_sent.json")
+
+
+def _load_bot_sent():
+    try:
+        with open(_BOTSENT_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+_bot_sent = _load_bot_sent()  # room -> [봇이 보낸 답들]
+
+
+def _record_bot_sent(room, text):
+    lst = _bot_sent.setdefault(room, [])
+    lst.append(text)
+    del lst[:-100]  # 최근 100개만
+    try:
+        with open(_BOTSENT_PATH, "w", encoding="utf-8") as f:
+            json.dump(_bot_sent, f, ensure_ascii=False)
+    except Exception:
+        pass
+
 # 자동응답 켜진 방 목록(서버 재시작 시 자동 재개용). 방 이름 포함이라 .gitignore 대상.
 _ACTIVE_PATH = os.path.join(os.path.dirname(__file__), "auto_active.json")
 
@@ -331,10 +356,11 @@ def _my_style_examples(room, n=12):
         msgs = kakdb.read_messages(room, limit=200) or []
     except Exception:
         return []
+    bot = set(_bot_sent.get(room, []))   # 봇이 보낸 답은 제외(자기 답 되배우기 방지)
     out = []
     for m in msgs:
         t = (m.get("text") or "").strip()
-        if m.get("mine") and t and not t.startswith("[") and len(t) <= 50:
+        if m.get("mine") and t and not t.startswith("[") and len(t) <= 50 and t not in bot:
             out.append(t)
     # 중복 제거하고 최근 n개
     seen, uniq = set(), []
@@ -346,7 +372,54 @@ def _my_style_examples(room, n=12):
     return list(reversed(uniq))
 
 
-def _generate(log_text, style=None, examples=None):
+# 방별 말투 프로파일(claude가 내 과거 메시지를 분석해 요약한 말투 지침). 미리 '학습'해 저장.
+_PROFILE_PATH = os.path.join(os.path.dirname(__file__), "style_profile.json")
+
+
+def _load_profiles():
+    try:
+        with open(_PROFILE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+_profiles = _load_profiles()  # room -> 말투 지침 텍스트
+
+
+def _save_profiles():
+    try:
+        with open(_PROFILE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_profiles, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _learn_style(room):
+    """그 방에서 내가 보낸 메시지를 claude로 분석해 말투 프로파일을 만들어 저장한다."""
+    ex = _my_style_examples(room, n=40)
+    if len(ex) < 3:
+        return None
+    prompt = (
+        "아래는 한 사람이 '" + room + "' 카카오톡 방에서 실제로 보낸 메시지들이야. "
+        "이 사람의 말투를 다른 사람이 똑같이 흉내 낼 수 있게 핵심 특징만 지침으로 정리해줘. "
+        "꼭 포함: 존댓말/반말, 자주 쓰는 어미·호칭, 줄임말, 이모티콘·ㅋㅋ 습관, 말버릇. "
+        "서론·설명 없이 3~5줄 지침만 출력.\n\n" + "\n".join("- " + e for e in ex)
+    )
+    import tempfile
+    r = subprocess.run(
+        [_CLAUDE_BIN, "-p", "--model", _LLM_MODEL],
+        input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=120, cwd=tempfile.gettempdir(),
+    )
+    prof = (r.stdout or "").strip()
+    if prof:
+        _profiles[room] = prof
+        _save_profiles()
+    return prof
+
+
+def _generate(log_text, style=None, examples=None, profile=None):
     msgs = [LINE_RE.match(l).groups() for l in log_text.splitlines() if LINE_RE.match(l)]
     convo = "\n".join(f"{s}: {m}" for s, _t, m in msgs[-40:])  # 긴 약속 대화(장소→시간) 맥락까지 포함
     tone = ("[말투: " + style + "]") if style else "[말투: 상대와의 관계에 맞춰 자연스럽게]"
@@ -354,13 +427,14 @@ def _generate(log_text, style=None, examples=None):
     last_sender = next((s for s, _t, _m in reversed(msgs) if s != MY_NAME), None)
     who = ("[방금 '" + last_sender + "'가 보낸 메시지에 답하는 거야. 그 사람에게 맞는 호칭을 써]\n") if last_sender else ""
     # few-shot: 이 방에서 내가 실제 쓰던 말투 예시를 보여줘 그 톤·줄임말·이모티콘을 따라하게 한다.
+    pf = ("[내 말투 특징 — 이대로 말해]\n" + profile + "\n") if profile else ""
     ex = ""
     if examples:
         ex = ("[내가 평소 이 방에서 쓰는 말투 예시 — 이 톤·줄임말·이모티콘·어미를 그대로 흉내 내]\n"
               + "\n".join("- " + e for e in examples) + "\n")
     import datetime
     today = datetime.datetime.now().strftime("%Y-%m-%d (%A)")
-    prompt = "[오늘: " + today + "]\n" + ex + "[대화]\n" + convo + "\n" + tone + "\n" + who + "[나의 답장]:"
+    prompt = "[오늘: " + today + "]\n" + pf + ex + "[대화]\n" + convo + "\n" + tone + "\n" + who + "[나의 답장]:"
     # Claude Code 구독 인증 사용(별도 API 키 불필요). 프로젝트 설정 로드를 피하려 임시 폴더에서 실행.
     # 프롬프트는 반드시 stdin으로 전달 — claude.CMD 인자로 주면 개행에서 잘려 맥락이 깨진다(실측).
     import tempfile
@@ -375,6 +449,7 @@ def _generate(log_text, style=None, examples=None):
 
 def _auto_loop(room, stop, style=None):
     examples = _my_style_examples(room)   # 이 방에서 내가 쓰던 말투(방마다 다름) 학습용
+    profile = _profiles.get(room)          # 미리 학습해둔 말투 프로파일(있으면)
     try:
         with _lock:
             seen = set(kakao_lib.read_room(room, open_if_needed=False).splitlines())
@@ -393,7 +468,7 @@ def _auto_loop(room, stop, style=None):
         if not incoming:
             continue
         try:
-            reply = _generate(text, style, examples)
+            reply = _generate(text, style, examples, profile)
         except Exception as e:
             print("[auto] LLM 실패:", e, flush=True)
             continue
@@ -408,6 +483,7 @@ def _auto_loop(room, stop, style=None):
         elif r:
             try:
                 send(room, reply)
+                _record_bot_sent(room, r)   # 봇 답 기록(말투 예시에서 제외용)
             except Exception as e:
                 print("[auto] 전송 실패:", e, flush=True)
 
@@ -567,6 +643,10 @@ class Handler(BaseHTTPRequestHandler):
                     finally:
                         _release_input()
                 self._send(200, {"ok": True})
+            elif self.path == "/learn":
+                prof = _learn_style(data["room"])
+                self._send(200, {"ok": bool(prof), "profile": prof or ""})
+                return
             elif self.path == "/auto/start":
                 auto_start(data["room"], data.get("style"))
                 self._send(200, {"on": True})

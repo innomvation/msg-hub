@@ -16,6 +16,8 @@ __pycache__/
 src/kakao/rooms.json
 src/kakao/auto_style.json
 src/kakao/auto_active.json
+src/kakao/bot_sent.json
+src/kakao/style_profile.json
 
 # logs
 *.log
