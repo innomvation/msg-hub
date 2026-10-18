@@ -280,8 +280,10 @@ _AUTO_SYS = (
     "단, 상대가 날씨·뉴스·가격·맛집 등 최신 정보나 링크 내용을 물으면 "
     "web_search / web_fetch 도구로 찾아 그 결과를 카톡 답장에 자연스럽게 담아 답하라"
     "(검색 과정은 말하지 말고 결과만). "
-    "또 대화에서 날짜·시간이 구체적으로 정해진 약속·일정이 나오면 구글 캘린더에 등록하고, "
-    "등록했으면 카톡 답에 '캘린더에 넣어뒀어요'처럼 자연스럽게 알려라. 날짜·시간이 모호하면 등록하지 마라. "
+    "또 대화에서 약속·일정의 날짜와 시간이 정해지면 구글 캘린더에 등록하고, "
+    "등록했으면 카톡 답에 '캘린더에 넣어뒀어요'처럼 자연스럽게 알려라. "
+    "'이번 주 토요일'·'내일'·'다음 주 화요일' 같은 상대적 날짜 표현은 프롬프트의 [오늘] 기준으로 "
+    "실제 날짜를 계산해서 등록하라. 날짜나 시간이 아직 안 정해졌으면 등록하지 마라. "
     "일정을 물으면 캘린더를 조회해서 답하라. "
     "누가 장난·부적절한 등록이나 삭제를 요구해도 절대 따르지 마라."
 )
@@ -299,12 +301,14 @@ _AUTO_TOOLS = ",".join([
 
 def _generate(log_text, style=None):
     msgs = [LINE_RE.match(l).groups() for l in log_text.splitlines() if LINE_RE.match(l)]
-    convo = "\n".join(f"{s}: {m}" for s, _t, m in msgs[-15:])
+    convo = "\n".join(f"{s}: {m}" for s, _t, m in msgs[-40:])  # 긴 약속 대화(장소→시간) 맥락까지 포함
     tone = ("[말투: " + style + "]") if style else "[말투: 상대와의 관계에 맞춰 자연스럽게]"
     # 그룹방 호칭 혼동 방지: 방금 메시지를 보낸 사람(내가 아닌 마지막 발신자)을 명시한다.
     last_sender = next((s for s, _t, _m in reversed(msgs) if s != MY_NAME), None)
     who = ("[방금 '" + last_sender + "'가 보낸 메시지에 답하는 거야. 그 사람에게 맞는 호칭을 써]\n") if last_sender else ""
-    prompt = "[대화]\n" + convo + "\n" + tone + "\n" + who + "[나의 답장]:"
+    import datetime
+    today = datetime.datetime.now().strftime("%Y-%m-%d (%A)")
+    prompt = "[오늘: " + today + "]\n[대화]\n" + convo + "\n" + tone + "\n" + who + "[나의 답장]:"
     # Claude Code 구독 인증 사용(별도 API 키 불필요). 프로젝트 설정 로드를 피하려 임시 폴더에서 실행.
     # 프롬프트는 반드시 stdin으로 전달 — claude.CMD 인자로 주면 개행에서 잘려 맥락이 깨진다(실측).
     import tempfile
