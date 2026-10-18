@@ -61,7 +61,7 @@ _lock = threading.Lock()  # 클립보드/키보드 상태를 건드리므로 한
 # 자동응답: Claude Code 구독 인증을 쓰는 `claude -p` 일회성 호출로 답변 생성(별도 API 키 불필요).
 # 매 호출마다 최근 대화를 프롬프트에 통째로 넣어 맥락을 파악시킨다.
 _CLAUDE_BIN = shutil.which("claude") or "claude"
-_LLM_MODEL = os.getenv("KAKAO_LLM_MODEL", "haiku")  # haiku(싸고 빠름) / sonnet / opus
+_LLM_MODEL = os.getenv("KAKAO_LLM_MODEL", "claude-haiku-5-5")  # Haiku 5.5(2026-10 출시, 싸고 빠름)
 
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "rooms.json")
@@ -247,27 +247,56 @@ def send_media_bytes(room, filename, data):
 # ─────────── 자동응답 (방별 ON/OFF) ───────────
 _auto = {}  # room -> threading.Event (set 되면 중지)
 
+# 방별 말투 설정(아빠=존댓말, 친구=반말 등). 방 이름이 들어가므로 저장 파일은 .gitignore 대상.
+_STYLE_PATH = os.path.join(os.path.dirname(__file__), "auto_style.json")
 
-def _generate(log_text):
+
+def _load_styles():
+    try:
+        with open(_STYLE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_styles(d):
+    try:
+        with open(_STYLE_PATH, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+_styles = _load_styles()  # room -> 말투 지시 문자열
+
+
+# claude -p를 코딩 에이전트가 아니라 '카톡 답장 생성기'로 고정하는 시스템 프롬프트.
+# 이걸 --append-system-prompt 로 넣어야 맥락을 제대로 읽고 메타답변이 안 나온다(실측).
+_AUTO_SYS = (
+    "너는 카카오톡 대화 속의 '나'로서 답장만 출력하는 역할이다. 너는 코딩 도우미가 아니다. "
+    "도구·코드·파일 얘기 절대 하지 마라. 추가 정보를 요청하지 마라(입력은 이미 완료됨). "
+    "입력된 [대화]를 읽고, 상대의 마지막 메시지(한 사람이 연속으로 여러 개 보냈으면 전부 고려)에 "
+    "보낼 실제 카톡 답장 1~2문장만 출력하라. 설명·해설·되묻기·메타발화·따옴표는 절대 금지."
+)
+
+
+def _generate(log_text, style=None):
     msgs = [LINE_RE.match(l).groups() for l in log_text.splitlines() if LINE_RE.match(l)]
     convo = "\n".join(f"{s}: {m}" for s, _t, m in msgs[-15:])
-    prompt = (
-        "너는 카카오톡에서 가족과 대화하는 '나'야. 아래는 최근 대화야. "
-        "맥락을 보고 상대의 마지막 메시지에 실제 카톡처럼 존댓말로 1~2문장 짧게 답장해. "
-        "답장 '내용'만 한 줄로 출력하고, 설명·해설·따옴표·'알겠습니다/작성하겠습니다' 같은 메타 발화는 절대 쓰지 마.\n\n"
-        "[대화]\n" + convo + "\n\n[지금 '나'가 보낼 답장]"
-    )
+    tone = ("[말투: " + style + "]") if style else "[말투: 상대와의 관계에 맞춰 자연스럽게]"
+    prompt = "[대화]\n" + convo + "\n" + tone + "\n[나의 답장]:"
     # Claude Code 구독 인증 사용(별도 API 키 불필요). 프로젝트 설정 로드를 피하려 임시 폴더에서 실행.
+    # 프롬프트는 반드시 stdin으로 전달 — claude.CMD 인자로 주면 개행에서 잘려 맥락이 깨진다(실측).
     import tempfile
     r = subprocess.run(
-        [_CLAUDE_BIN, "-p", prompt, "--model", _LLM_MODEL],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        [_CLAUDE_BIN, "-p", "--model", _LLM_MODEL, "--append-system-prompt", _AUTO_SYS],
+        input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=120, cwd=tempfile.gettempdir(),
     )
     return (r.stdout or "").strip()
 
 
-def _auto_loop(room, stop):
+def _auto_loop(room, stop, style=None):
     try:
         with _lock:
             seen = set(kakao_lib.read_room(room, open_if_needed=False).splitlines())
@@ -286,7 +315,7 @@ def _auto_loop(room, stop):
         if not incoming:
             continue
         try:
-            reply = _generate(text)
+            reply = _generate(text, style)
         except Exception as e:
             print("[auto] LLM 실패:", e, flush=True)
             continue
@@ -297,9 +326,12 @@ def _auto_loop(room, stop):
                 print("[auto] 전송 실패:", e, flush=True)
 
 
-def auto_start(room):
+def auto_start(room, style=None):
     if room in _auto:
         return
+    if style is not None:                       # 말투 지정이 왔으면 저장(다음에 기본값)
+        _styles[room] = style
+        _save_styles(_styles)
     # 자동응답 켤 때 방이 닫혀있으면 백그라운드로 연다(최소화+포커스 복귀)
     with _lock:
         try:
@@ -308,7 +340,7 @@ def auto_start(room):
             _release_input()
     stop = threading.Event()
     _auto[room] = stop
-    threading.Thread(target=_auto_loop, args=(room, stop), daemon=True).start()
+    threading.Thread(target=_auto_loop, args=(room, stop, _styles.get(room)), daemon=True).start()
 
 
 def auto_stop(room):
@@ -402,7 +434,8 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/media":
                 self._serve_media(q)
             elif u.path == "/auto/status":
-                self._send(200, {"on": auto_on(q.get("room", [""])[0])})
+                room = q.get("room", [""])[0]
+                self._send(200, {"on": auto_on(room), "style": _styles.get(room, "")})
             else:
                 self._send(404, {"error": "not found"})
         except Exception as e:
@@ -447,7 +480,7 @@ class Handler(BaseHTTPRequestHandler):
                         _release_input()
                 self._send(200, {"ok": True})
             elif self.path == "/auto/start":
-                auto_start(data["room"])
+                auto_start(data["room"], data.get("style"))
                 self._send(200, {"on": True})
             elif self.path == "/auto/stop":
                 auto_stop(data["room"])

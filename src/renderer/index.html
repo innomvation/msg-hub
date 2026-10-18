@@ -298,22 +298,33 @@
       }
 
       // ── 자동응답 토글 ──
+      let autoStyle = "";  // 이 방에 저장된 자동응답 말투
       async function refreshAuto() {
         try {
-          autoOn = (await (await fetch(KAKAO + "/auto/status?room=" + encodeURIComponent(currentRoom))).json()).on;
+          const s = await (await fetch(KAKAO + "/auto/status?room=" + encodeURIComponent(currentRoom))).json();
+          autoOn = s.on; autoStyle = s.style || "";
         } catch (e) { autoOn = false; }
         autoBtn.classList.toggle("on", autoOn);
       }
       autoBtn.onclick = async () => {
         if (!currentRoom) return;
+        const body = { room: currentRoom };
+        if (!autoOn) {  // 켤 때 말투 입력(저장된 값이 기본)
+          const style = prompt(
+            "이 방 자동응답 말투를 정해줘\n예) 존댓말 공손하게 / 반말 편하게 ㅋㅋ섞어 / 다정하게 애교섞어",
+            autoStyle);
+          if (style === null) return;  // 취소
+          body.style = style.trim();
+        }
         const path = autoOn ? "/auto/stop" : "/auto/start";
         try {
           const d = await (await fetch(KAKAO + path, {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ room: currentRoom }),
+            body: JSON.stringify(body),
           })).json();
           if (d.error) { alert("자동응답 실패: " + d.error); return; }
           autoOn = !!d.on;
+          if (body.style !== undefined) autoStyle = body.style;
           autoBtn.classList.toggle("on", autoOn);
           if (autoOn) setTimeout(loadMessages, 800); // 방이 막 열렸으면 메시지 로드
         } catch (e) { alert("자동응답 전환 실패: " + e); }
