@@ -15,6 +15,8 @@ import re
 import json
 import time
 import threading
+import subprocess
+import shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -56,20 +58,10 @@ MY_NAME = os.getenv("KAKAO_MY_NAME", "나")  # 자동응답에서 '내' 메시�
 LINE_RE = re.compile(r"^\[([^\]]+)\] \[([^\]]+)\] (.*)$")
 _lock = threading.Lock()  # 클립보드/키보드 상태를 건드리므로 한 번에 하나씩만
 
-# 자동응답용 LLM — 자동응답을 켤 때만 실제 호출. .env 경로는 환경변수로 지정.
-_ENV = os.getenv("KAKAO_LLM_ENV", "")
-_llm = None
-_LLM_MODEL = "qwen3.5-9b"
-
-
-def _get_llm():
-    global _llm
-    if _llm is None:
-        from dotenv import load_dotenv
-        from openai import OpenAI
-        load_dotenv(_ENV)
-        _llm = OpenAI(base_url="https://agent.kau.ac.kr/v1", api_key=os.getenv("KAU_API_KEY"))
-    return _llm
+# 자동응답: Claude Code 구독 인증을 쓰는 `claude -p` 일회성 호출로 답변 생성(별도 API 키 불필요).
+# 매 호출마다 최근 대화를 프롬프트에 통째로 넣어 맥락을 파악시킨다.
+_CLAUDE_BIN = shutil.which("claude") or "claude"
+_LLM_MODEL = os.getenv("KAKAO_LLM_MODEL", "haiku")  # haiku(싸고 빠름) / sonnet / opus
 
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "rooms.json")
@@ -259,15 +251,20 @@ _auto = {}  # room -> threading.Event (set 되면 중지)
 def _generate(log_text):
     msgs = [LINE_RE.match(l).groups() for l in log_text.splitlines() if LINE_RE.match(l)]
     convo = "\n".join(f"{s}: {m}" for s, _t, m in msgs[-15:])
-    r = _get_llm().chat.completions.create(
-        model=_LLM_MODEL,
-        messages=[
-            {"role": "system", "content": "너는 이 카톡방의 '나'로서 대화해. 반말로 1~2문장 짧고 자연스럽게, 마지막에 온 메시지에만 답해."},
-            {"role": "user", "content": convo + "\n\n위 대화에서 '나'로서 마지막 메시지에 답장만 써."},
-        ],
-        max_tokens=150, temperature=0.7,
+    prompt = (
+        "너는 카카오톡에서 가족과 대화하는 '나'야. 아래는 최근 대화야. "
+        "맥락을 보고 상대의 마지막 메시지에 실제 카톡처럼 존댓말로 1~2문장 짧게 답장해. "
+        "답장 '내용'만 한 줄로 출력하고, 설명·해설·따옴표·'알겠습니다/작성하겠습니다' 같은 메타 발화는 절대 쓰지 마.\n\n"
+        "[대화]\n" + convo + "\n\n[지금 '나'가 보낼 답장]"
     )
-    return r.choices[0].message.content.strip()
+    # Claude Code 구독 인증 사용(별도 API 키 불필요). 프로젝트 설정 로드를 피하려 임시 폴더에서 실행.
+    import tempfile
+    r = subprocess.run(
+        [_CLAUDE_BIN, "-p", prompt, "--model", _LLM_MODEL],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=120, cwd=tempfile.gettempdir(),
+    )
+    return (r.stdout or "").strip()
 
 
 def _auto_loop(room, stop):
