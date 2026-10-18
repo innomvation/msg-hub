@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>메신저 허브</title>
+    <style>
+      :root {
+        --bg: #2b2d31;
+        --panel: #313338;
+        --head: #1e1f22;
+        --text: #dbdee1;
+        --muted: #949ba4;
+        --accent: #5865f2;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; overflow: hidden; font-family: "Malgun Gothic", "Segoe UI", sans-serif; }
+      #app { display: flex; height: 100%; background: var(--head); }
+
+      .col { flex: 1 1 0; min-width: 220px; display: flex; flex-direction: column; background: var(--panel); overflow: hidden; }
+      .resizer { flex: 0 0 5px; background: var(--head); cursor: col-resize; }
+      .resizer:hover { background: var(--accent); }
+      #app.resizing webview { pointer-events: none; }
+      .col-head {
+        height: 38px; flex-shrink: 0; background: var(--head); color: var(--text);
+        display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 13px; font-weight: 600;
+      }
+      .col-head .dot { width: 9px; height: 9px; border-radius: 50%; }
+      .dot.discord { background: #5865f2; }
+      .dot.instagram { background: #e1306c; }
+      .dot.kakao { background: #fee500; }
+      webview { flex: 1; border: none; }
+
+      /* ─────────── 카카오톡 칸 (카톡 PC 스타일) ─────────── */
+      #kakao-col { background: #fff; }
+      #kakao-col .col-head { background: #4b5159; }
+      #kakao-readsync { margin-left: auto; background: #5a616b; color: #cfd4da; border: 1px solid #6b727c;
+                        border-radius: 10px; font-size: 10px; font-weight: 600; padding: 3px 9px; cursor: pointer; }
+      #kakao-readsync.on { background: #fee500; color: #3a2e00; border-color: #fee500; }
+      .kpin { color: #f0a500; font-size: 11px; margin-right: 3px; }
+      .kakao-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+      .hidden { display: none !important; }
+
+      /* 채팅 목록 */
+      #kakao-list-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+      #kakao-addbar { display: none; gap: 6px; padding: 8px; background: #fafafa; border-bottom: 1px solid #eee; }
+      #kakao-addbar input { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 7px 10px; font-size: 12px; outline: none; color: #111; }
+      #kakao-addbar button { background: #fee500; border: none; border-radius: 8px; width: 34px; font-size: 17px; cursor: pointer; color: #3a2e00; }
+      #kakao-list { flex: 1; background: #fff; overflow-y: auto; }
+      .kdel { background: none; border: none; color: #ccc; font-size: 16px; cursor: pointer; padding: 0 2px; flex-shrink: 0; align-self: center; }
+      .kdel:hover { color: #e55; }
+      .krow {
+        display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer;
+        border-bottom: 1px solid #f0f0f0;
+      }
+      .krow:hover { background: #f6f7f9; }
+      .kavatar {
+        width: 42px; height: 42px; border-radius: 15px; flex-shrink: 0; background: #dfe3e8; overflow: hidden;
+        display: flex; align-items: center; justify-content: center; font-size: 17px; color: #7a828c; font-weight: 700;
+      }
+      .kavatar img { width: 100%; height: 100%; object-fit: cover; }
+      .kinfo { flex: 1; min-width: 0; }
+      .kname { font-size: 14px; color: #111; font-weight: 600; }
+      .kprev { font-size: 12px; color: #999; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+      .ktime { font-size: 11px; color: #b5b5b5; }
+      .kmeta { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex-shrink: 0; margin-top: 3px; }
+      .kbadge { background: #fa5252; color: #fff; font-size: 10px; font-weight: 700; min-width: 17px; height: 17px;
+                border-radius: 9px; display: none; align-items: center; justify-content: center; padding: 0 5px; }
+      .kbadge.show { display: flex; }
+      #kakao-list-empty { margin: auto; color: #aaa; text-align: center; font-size: 13px; line-height: 1.7; padding: 20px; }
+
+      /* 채팅방 */
+      #kakao-chat { background: #b2c7da; }
+      .chat-top {
+        height: 44px; flex-shrink: 0; background: #a5bcd0; display: flex; align-items: center;
+        gap: 6px; padding: 0 10px; color: #223; font-weight: 600; font-size: 14px;
+      }
+      .chat-top button { background: none; border: none; font-size: 20px; color: #223; cursor: pointer; padding: 0 4px; }
+      #auto-toggle {
+        margin-left: auto; width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+        background: #cfd8e0; color: #7a828c; font-size: 14px; padding: 0;
+        display: flex; align-items: center; justify-content: center; transition: all .15s;
+      }
+      #auto-toggle.on { background: #06c755; color: #fff; box-shadow: 0 0 0 3px #06c75540; }
+      #kakao-msgs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 3px; }
+      .datepill { align-self: center; background: rgba(0,0,0,.18); color: #fff; font-size: 11px; padding: 3px 12px; border-radius: 12px; margin: 8px 0; }
+      .msg { display: flex; flex-direction: column; margin-top: 7px; max-width: 78%; }
+      .msg .sender { font-size: 12px; color: #4a4a4a; margin-bottom: 3px; }
+      .bubbleline { display: flex; align-items: flex-end; gap: 5px; }
+      .bubble { padding: 7px 10px; border-radius: 12px; font-size: 13px; white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
+      .bubble.mediabubble { background: transparent !important; padding: 0 !important; }
+      .mimg { max-width: 180px; max-height: 260px; border-radius: 10px; display: block; cursor: pointer; }
+      .memoticon { width: 120px; height: 120px; object-fit: contain; display: block; }
+      .time { font-size: 10px; color: #566; flex-shrink: 0; }
+      .unread { font-size: 11px; font-weight: 700; color: #f6c000; flex-shrink: 0; align-self: flex-end; margin-bottom: 1px; }
+      .datesep { display: flex; justify-content: center; margin: 12px 0 8px; }
+      .datesep span { background: rgba(0,0,0,.22); color: #fff; font-size: 11px; padding: 3px 12px; border-radius: 12px; }
+      /* 상대 메시지: 왼쪽, 흰 말풍선 */
+      .msg.them { align-self: flex-start; flex-direction: row; gap: 6px; align-items: flex-start; }
+      .msg.them .bubble { background: #fff; color: #111; border-top-left-radius: 3px; }
+      .mavatar { width: 34px; height: 34px; border-radius: 13px; flex-shrink: 0; background: #cfd8e0; overflow: hidden;
+                 display: flex; align-items: center; justify-content: center; font-size: 13px; color: #67707a; font-weight: 700; }
+      .mavatar img { width: 100%; height: 100%; object-fit: cover; }
+      .mcontent { display: flex; flex-direction: column; min-width: 0; }
+      /* 내 메시지: 오른쪽, 노란 말풍선 */
+      .msg.mine { align-self: flex-end; align-items: flex-end; }
+      .msg.mine .bubbleline { flex-direction: row-reverse; }
+      .msg.mine .bubble { background: #fee500; color: #111; border-top-right-radius: 3px; }
+
+      #kakao-input { display: flex; gap: 6px; padding: 8px; background: #fff; border-top: 1px solid #0001; }
+      #kakao-input input {
+        flex: 1; background: #f2f3f5; border: none; border-radius: 18px; padding: 9px 14px;
+        color: #111; font-size: 13px; outline: none;
+      }
+      #kakao-input button {
+        background: #fee500; color: #3a2e00; border: none; border-radius: 18px;
+        padding: 0 16px; cursor: pointer; font-size: 13px; font-weight: 600;
+      }
+      #kakao-input button:disabled { opacity: .5; cursor: default; }
+      #kakao-attach { background: #e9ebee !important; color: #4b5159 !important; padding: 0 12px !important; font-size: 16px !important; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <section class="col" id="col-discord">
+        <div class="col-head"><span class="dot discord"></span>디스코드</div>
+        <webview
+          src="https://discord.com/app"
+          partition="persist:discord"
+          allowpopups
+          useragent="Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+        ></webview>
+      </section>
+
+      <div class="resizer" data-left="col-discord" data-right="col-instagram"></div>
+
+      <section class="col" id="col-instagram">
+        <div class="col-head"><span class="dot instagram"></span>인스타그램</div>
+        <webview
+          src="https://www.instagram.com/direct/inbox/"
+          partition="persist:instagram"
+          allowpopups
+          useragent="Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+        ></webview>
+      </section>
+
+      <div class="resizer" data-left="col-instagram" data-right="kakao-col"></div>
+
+      <section class="col" id="kakao-col">
+        <div class="col-head"><span class="dot kakao"></span>카카오톡<button id="kakao-readsync" title="읽음 동기화: 켜면 허브에서 방을 열 때 폰에서도 읽음 처리됩니다">읽음동기화</button></div>
+
+        <!-- 채팅 목록 -->
+        <div class="kakao-view" id="kakao-list-view">
+          <div id="kakao-addbar">
+            <input id="kakao-add-input" placeholder="방 이름 추가 (정확히 입력)" />
+            <button id="kakao-add-btn" title="추가">+</button>
+          </div>
+          <div id="kakao-list"><div id="kakao-list-empty">불러오는 중…</div></div>
+        </div>
+
+        <!-- 채팅방 -->
+        <div class="kakao-view hidden" id="kakao-chat">
+          <div class="chat-top">
+            <button id="kakao-back" title="목록">←</button>
+            <span id="kakao-title"></span>
+            <button id="auto-toggle" title="자동응답 켜기/끄기">🤖</button>
+          </div>
+          <div id="kakao-msgs"></div>
+          <div id="kakao-input">
+            <button id="kakao-attach" title="사진·파일 보내기">📎</button>
+            <input id="kakao-file" type="file" hidden />
+            <input id="kakao-text" placeholder="메시지 입력" />
+            <button id="kakao-send">전송</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const KAKAO = "http://127.0.0.1:8787";
+      const MY_NAME = "나";
+      const listViewEl = document.getElementById("kakao-list-view");
+      const listEl = document.getElementById("kakao-list");
+      const addInput = document.getElementById("kakao-add-input");
+      const chatEl = document.getElementById("kakao-chat");
+      const msgsEl = document.getElementById("kakao-msgs");
+      const titleEl = document.getElementById("kakao-title");
+      const textEl = document.getElementById("kakao-text");
+      const sendBtn = document.getElementById("kakao-send");
+      const autoBtn = document.getElementById("auto-toggle");
+      const readSyncBtn = document.getElementById("kakao-readsync");
+      let readSync = localStorage.getItem("kakaoReadSync") === "1";
+      readSyncBtn.classList.toggle("on", readSync);
+      readSyncBtn.onclick = () => {
+        readSync = !readSync;
+        localStorage.setItem("kakaoReadSync", readSync ? "1" : "0");
+        readSyncBtn.classList.toggle("on", readSync);
+      };
+      let currentRoom = null;
+      let pollTimer = null;
+      let listTimer = null;
+      let lastRoomKey = null;
+      let autoOn = false;
+
+      // ── 채팅 목록 ──
+      async function loadRooms(force) {
+        let rooms = [];
+        try {
+          rooms = (await (await fetch(KAKAO + "/rooms")).json()).rooms || [];
+        } catch (e) {
+          listEl.innerHTML = '<div id="kakao-list-empty">백엔드 연결 실패<br>' + e + "</div>";
+          lastRoomKey = null;
+          return;
+        }
+        const key = JSON.stringify(rooms);
+        if (!force && key === lastRoomKey) return; // 방 목록 변동 없으면 다시 안 그림
+        lastRoomKey = key;
+        if (rooms.length === 0) {
+          listEl.innerHTML = '<div id="kakao-list-empty">등록된 방이 없어요.<br>위에 방 이름을 추가하세요.</div>';
+          return;
+        }
+        listEl.innerHTML = "";
+        rooms.forEach(({ name, open, preview, time, unread, image, pinned }) => {
+          const row = document.createElement("div");
+          row.className = "krow";
+          row.innerHTML =
+            '<div class="kavatar"></div>' +
+            '<div class="kinfo"><div class="kname">' + (pinned ? '<span class="kpin">📌</span>' : "") + '</div><div class="kprev"></div></div>' +
+            '<div class="kmeta"><div class="ktime"></div><div class="kbadge"></div></div>';
+          const av = row.querySelector(".kavatar");
+          if (image) {
+            const im = document.createElement("img");
+            im.src = image; im.loading = "lazy";
+            im.onerror = () => { im.remove(); av.textContent = [...name][0] || "?"; };
+            av.appendChild(im);
+          } else {
+            av.textContent = [...name][0] || "?";
+          }
+          row.querySelector(".kname").appendChild(document.createTextNode(name));
+          row.querySelector(".kprev").textContent = preview || (open ? "…" : "");
+          row.querySelector(".ktime").textContent = time || "";
+          if (unread > 0) {
+            const b = row.querySelector(".kbadge");
+            b.textContent = unread > 999 ? "999+" : unread;
+            b.classList.add("show");
+          }
+          row.onclick = () => openChat(name);
+          listEl.appendChild(row);
+        });
+      }
+
+      async function addRoom() {
+        const v = addInput.value.trim();
+        if (!v) return;
+        addInput.value = "";
+        try { await fetch(KAKAO + "/rooms/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room: v }) }); }
+        catch (e) { alert("추가 실패: " + e); }
+        loadRooms(true);
+      }
+
+      async function removeRoom(name) {
+        try { await fetch(KAKAO + "/rooms/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room: name }) }); }
+        catch (e) {}
+        loadRooms(true);
+      }
+
+      async function fillPreview(name, row) {
+        try {
+          const d = await (await fetch(KAKAO + "/read?room=" + encodeURIComponent(name))).json();
+          const m = d.messages;
+          if (m && m.length) {
+            const last = m[m.length - 1];
+            const pre = (last.sender === MY_NAME ? "나: " : "") + last.text;
+            row.querySelector(".kprev").textContent = pre;
+            row.querySelector(".ktime").textContent = last.time;
+          }
+          // 읽을 메시지가 없으면 알림 미리보기를 그대로 둠
+        } catch (e) { /* 미리보기 실패 시 기존 값 유지 */ }
+      }
+
+      // ── 채팅방 ──
+      function openChat(name) {
+        currentRoom = name;
+        titleEl.textContent = name;
+        if (readSync) {   // 읽음 동기화 ON: 방을 백그라운드로 열어 폰까지 읽음 처리
+          fetch(KAKAO + "/markread", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ room: name }),
+          }).catch(() => {});
+        }
+        if (listTimer) clearInterval(listTimer);
+        listViewEl.classList.add("hidden");
+        chatEl.classList.remove("hidden");
+        msgsEl.innerHTML = '<div style="margin:auto;color:#577;">여는 중…</div>';
+        loadMessages();
+        refreshAuto();
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(loadMessages, 3000);
+      }
+
+      // ── 자동응답 토글 ──
+      async function refreshAuto() {
+        try {
+          autoOn = (await (await fetch(KAKAO + "/auto/status?room=" + encodeURIComponent(currentRoom))).json()).on;
+        } catch (e) { autoOn = false; }
+        autoBtn.classList.toggle("on", autoOn);
+      }
+      autoBtn.onclick = async () => {
+        if (!currentRoom) return;
+        const path = autoOn ? "/auto/stop" : "/auto/start";
+        try {
+          const d = await (await fetch(KAKAO + path, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ room: currentRoom }),
+          })).json();
+          if (d.error) { alert("자동응답 실패: " + d.error); return; }
+          autoOn = !!d.on;
+          autoBtn.classList.toggle("on", autoOn);
+          if (autoOn) setTimeout(loadMessages, 800); // 방이 막 열렸으면 메시지 로드
+        } catch (e) { alert("자동응답 전환 실패: " + e); }
+      };
+
+      function backToList() {
+        if (pollTimer) clearInterval(pollTimer);
+        currentRoom = null;
+        chatEl.classList.add("hidden");
+        listViewEl.classList.remove("hidden");
+        loadRooms(true);
+        startListPoll();
+      }
+      // 마우스 뒤로가기 버튼용 (main.js에서 호출): 채팅방 열려있으면 목록으로
+      window.__backToList = () => { if (currentRoom) backToList(); };
+      // 카톡 패널 위에서 마우스 뒤로가기 버튼(3) → 목록으로 (렌더러 직접 처리, 더 확실)
+      window.addEventListener("mouseup", (e) => {
+        if (e.button === 3 && currentRoom) { e.preventDefault(); backToList(); }
+      });
+      window.addEventListener("auxclick", (e) => {
+        if (e.button === 3 && currentRoom) { e.preventDefault(); backToList(); }
+      });
+
+      async function loadMessages() {
+        if (!currentRoom) return;
+        let d;
+        try {
+          // openok=1: 닫혀 있으면 백그라운드로 열어서 읽음(최소화+포커스 복귀)
+          d = await (await fetch(KAKAO + "/read?room=" + encodeURIComponent(currentRoom) + "&openok=1")).json();
+        } catch (e) { return; }
+        if (d.error) { msgsEl.innerHTML = '<div style="margin:auto;color:#577;text-align:center;padding:20px;">' + d.error + "</div>"; return; }
+        const atBottom = msgsEl.scrollTop + msgsEl.clientHeight >= msgsEl.scrollHeight - 50;
+        msgsEl.innerHTML = "";
+        let lastSender = null;
+        let lastDate = null;
+        d.messages.forEach((m) => {
+          if (m.date && m.date !== lastDate) {       // 날짜 바뀌면 구분선
+            const sep = document.createElement("div");
+            sep.className = "datesep";
+            sep.innerHTML = '<span></span>';
+            sep.querySelector("span").textContent = m.date;
+            msgsEl.appendChild(sep);
+            lastDate = m.date;
+            lastSender = null;
+          }
+          const mine = (m.mine !== undefined) ? m.mine : (m.sender === MY_NAME);
+          const wrap = document.createElement("div");
+          wrap.className = "msg " + (mine ? "mine" : "them");
+          const showSender = !mine && m.sender !== lastSender;
+          if (mine) {
+            wrap.innerHTML = '<div class="bubbleline"><div class="bubble"></div><span class="time"></span><span class="unread"></span></div>';
+          } else {
+            wrap.innerHTML =
+              '<div class="mavatar"></div><div class="mcontent">' +
+              (showSender ? '<div class="sender"></div>' : "") +
+              '<div class="bubbleline"><div class="bubble"></div><span class="time"></span></div></div>';
+            const av = wrap.querySelector(".mavatar");
+            if (m.img) {
+              const im = document.createElement("img");
+              im.src = m.img;
+              im.onerror = () => { im.remove(); av.textContent = (m.sender || "?")[0]; };
+              av.appendChild(im);
+            } else {
+              av.textContent = (m.sender || "?")[0];
+            }
+            if (showSender) wrap.querySelector(".sender").textContent = m.sender;
+          }
+          const bubble = wrap.querySelector(".bubble");
+          if (m.media) {
+            bubble.classList.add("mediabubble");
+            const im = document.createElement("img");
+            im.className = m.media.kind === "emoticon" ? "memoticon" : "mimg";
+            im.src = m.media.kind === "emoticon"
+              ? KAKAO + "/media?kind=emoticon&path=" + encodeURIComponent(m.media.path)
+              : KAKAO + "/media?kind=image&url=" + encodeURIComponent(m.media.url);
+            im.onerror = () => { im.remove(); bubble.classList.remove("mediabubble"); bubble.textContent = m.text; };
+            bubble.appendChild(im);
+          } else {
+            bubble.textContent = m.text;
+          }
+          wrap.querySelector(".time").textContent = m.time;
+          if (mine && m.unread_count > 0) wrap.querySelector(".unread").textContent = m.unread_count;
+          msgsEl.appendChild(wrap);
+          lastSender = m.sender;
+        });
+        if (atBottom) msgsEl.scrollTop = msgsEl.scrollHeight;
+      }
+
+      async function doSend() {
+        const text = textEl.value.trim();
+        if (!text || !currentRoom) return;
+        sendBtn.disabled = true;
+        try {
+          const d = await (await fetch(KAKAO + "/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ room: currentRoom, text }),
+          })).json();
+          if (d.error) alert("전송 실패: " + d.error);
+          else { textEl.value = ""; setTimeout(loadMessages, 500); }
+        } catch (e) { alert("전송 실패: " + e); }
+        sendBtn.disabled = false;
+      }
+
+      // 사진·파일 보내기: 파일 바이트를 그대로 /sendmedia 로 업로드(서버가 임시저장 후 전송)
+      const attachBtn = document.getElementById("kakao-attach");
+      const fileInput = document.getElementById("kakao-file");
+      attachBtn.onclick = () => { if (currentRoom) fileInput.click(); };
+      fileInput.onchange = async () => {
+        const f = fileInput.files[0];
+        const room = currentRoom;
+        fileInput.value = "";
+        if (!f || !room) return;
+        attachBtn.disabled = true;
+        try {
+          const d = await (await fetch(
+            KAKAO + "/sendmedia?room=" + encodeURIComponent(room) + "&name=" + encodeURIComponent(f.name),
+            { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f }
+          )).json();
+          if (d.error) alert("전송 실패: " + d.error);
+          else setTimeout(loadMessages, 1200);
+        } catch (e) { alert("전송 실패: " + e); }
+        attachBtn.disabled = false;
+      };
+
+      function startListPoll() {
+        if (listTimer) clearInterval(listTimer);
+        listTimer = setInterval(() => loadRooms(false), 5000); // 목록 변동만 가볍게 반영
+      }
+
+      document.getElementById("kakao-back").onclick = backToList;
+      sendBtn.onclick = doSend;
+      textEl.addEventListener("keydown", (e) => { if (e.key === "Enter") doSend(); });
+      document.getElementById("kakao-add-btn").onclick = addRoom;
+      addInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addRoom(); });
+      loadRooms(true);
+      startListPoll();
+
+      // ── 칸 너비 드래그 조절 ──
+      (function () {
+        const app = document.getElementById("app");
+        const byId = (id) => document.getElementById(id);
+        document.querySelectorAll(".resizer").forEach((rz) => {
+          rz.addEventListener("mousedown", (e) => {
+            e.preventDefault();
+            const left = byId(rz.dataset.left), right = byId(rz.dataset.right);
+            const startX = e.clientX, lw = left.offsetWidth, rw = right.offsetWidth;
+            app.classList.add("resizing");
+            const move = (ev) => {
+              let d = ev.clientX - startX;
+              d = Math.max(-(lw - 220), Math.min(rw - 220, d));
+              left.style.flex = "0 0 " + (lw + d) + "px";
+              right.style.flex = "0 0 " + (rw - d) + "px";
+            };
+            const up = () => {
+              app.classList.remove("resizing");
+              document.removeEventListener("mousemove", move);
+              document.removeEventListener("mouseup", up);
+              try {
+                localStorage.setItem("colw", JSON.stringify({
+                  d: byId("col-discord").offsetWidth,
+                  i: byId("col-instagram").offsetWidth,
+                  k: byId("kakao-col").offsetWidth,
+                }));
+              } catch (e) {}
+            };
+            document.addEventListener("mousemove", move);
+            document.addEventListener("mouseup", up);
+          });
+        });
+        try {
+          const w = JSON.parse(localStorage.getItem("colw"));
+          if (w) {
+            byId("col-discord").style.flex = "0 0 " + w.d + "px";
+            byId("col-instagram").style.flex = "0 0 " + w.i + "px";
+            byId("kakao-col").style.flex = "0 0 " + w.k + "px";
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </body>
+</html>

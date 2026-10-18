@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+out/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# secrets / local config
+.env
+*.local
+src/kakao/rooms.json
+
+# logs
+*.log
+
+# OS
+Thumbs.db
+.DS_Store

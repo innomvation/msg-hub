@@ -1,0 +1,13 @@
+{
+  "name": "msg-hub",
+  "version": "0.1.0",
+  "description": "디스코드·인스타·카톡을 한 창에 모은 통합 메신저",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.4.11"
+  }
+}

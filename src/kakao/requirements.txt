@@ -1,0 +1,8 @@
+# 카톡 백엔드(server.py, kakdb.py) 의존성
+cryptography
+cbor2
+pywin32
+pywinauto
+pyperclip
+openai
+python-dotenv
