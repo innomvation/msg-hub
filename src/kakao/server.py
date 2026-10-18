@@ -323,16 +323,44 @@ _AUTO_TOOLS = ",".join([
 ])
 
 
-def _generate(log_text, style=None):
+def _my_style_examples(room, n=12):
+    """그 방에서 '나'(사용자)가 실제 보낸 짧은 메시지들 — few-shot 말투 예시용."""
+    if kakdb is None:
+        return []
+    try:
+        msgs = kakdb.read_messages(room, limit=200) or []
+    except Exception:
+        return []
+    out = []
+    for m in msgs:
+        t = (m.get("text") or "").strip()
+        if m.get("mine") and t and not t.startswith("[") and len(t) <= 50:
+            out.append(t)
+    # 중복 제거하고 최근 n개
+    seen, uniq = set(), []
+    for t in reversed(out):
+        if t not in seen:
+            seen.add(t); uniq.append(t)
+        if len(uniq) >= n:
+            break
+    return list(reversed(uniq))
+
+
+def _generate(log_text, style=None, examples=None):
     msgs = [LINE_RE.match(l).groups() for l in log_text.splitlines() if LINE_RE.match(l)]
     convo = "\n".join(f"{s}: {m}" for s, _t, m in msgs[-40:])  # 긴 약속 대화(장소→시간) 맥락까지 포함
     tone = ("[말투: " + style + "]") if style else "[말투: 상대와의 관계에 맞춰 자연스럽게]"
     # 그룹방 호칭 혼동 방지: 방금 메시지를 보낸 사람(내가 아닌 마지막 발신자)을 명시한다.
     last_sender = next((s for s, _t, _m in reversed(msgs) if s != MY_NAME), None)
     who = ("[방금 '" + last_sender + "'가 보낸 메시지에 답하는 거야. 그 사람에게 맞는 호칭을 써]\n") if last_sender else ""
+    # few-shot: 이 방에서 내가 실제 쓰던 말투 예시를 보여줘 그 톤·줄임말·이모티콘을 따라하게 한다.
+    ex = ""
+    if examples:
+        ex = ("[내가 평소 이 방에서 쓰는 말투 예시 — 이 톤·줄임말·이모티콘·어미를 그대로 흉내 내]\n"
+              + "\n".join("- " + e for e in examples) + "\n")
     import datetime
     today = datetime.datetime.now().strftime("%Y-%m-%d (%A)")
-    prompt = "[오늘: " + today + "]\n[대화]\n" + convo + "\n" + tone + "\n" + who + "[나의 답장]:"
+    prompt = "[오늘: " + today + "]\n" + ex + "[대화]\n" + convo + "\n" + tone + "\n" + who + "[나의 답장]:"
     # Claude Code 구독 인증 사용(별도 API 키 불필요). 프로젝트 설정 로드를 피하려 임시 폴더에서 실행.
     # 프롬프트는 반드시 stdin으로 전달 — claude.CMD 인자로 주면 개행에서 잘려 맥락이 깨진다(실측).
     import tempfile
@@ -346,6 +374,7 @@ def _generate(log_text, style=None):
 
 
 def _auto_loop(room, stop, style=None):
+    examples = _my_style_examples(room)   # 이 방에서 내가 쓰던 말투(방마다 다름) 학습용
     try:
         with _lock:
             seen = set(kakao_lib.read_room(room, open_if_needed=False).splitlines())
@@ -364,7 +393,7 @@ def _auto_loop(room, stop, style=None):
         if not incoming:
             continue
         try:
-            reply = _generate(text, style)
+            reply = _generate(text, style, examples)
         except Exception as e:
             print("[auto] LLM 실패:", e, flush=True)
             continue
