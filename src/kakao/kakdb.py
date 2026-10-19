@@ -418,7 +418,70 @@ def get_all_rooms():
         _cache["chatid"] = chatid
         if _cache["myid"] is None and memo_cid is not None:
             _cache["myid"] = _resolve_myid(chat_data, memo_cid)
+        _add_new_rooms(chat_data, rooms, chatid, users)   # 목록에 아직 없는 새 방(chatLogs만 생긴) 포함
         return rooms
+
+
+def _peer_name(chat_data, cid, users, myid):
+    """새 방 chatLogs에서 상대(내가 아닌 발신자) 이름을 찾는다."""
+    dek = _dek_for(f"chatLogs_{cid}.edb")
+    if not dek:
+        return None
+    tmp = _decrypt_tmp(chat_data, f"chatLogs_{cid}.edb", dek, f"pn_{cid}")
+    if not tmp:
+        return None
+    try:
+        con = sqlite3.connect(tmp)
+        con.text_factory = lambda b: b.decode("utf-8", "replace")
+        rows = con.execute(
+            "SELECT DISTINCT authorId FROM chatLogs WHERE deleted=0 ORDER BY sendAt DESC LIMIT 10"
+        ).fetchall()
+        con.close()
+        for (aid,) in rows:
+            if aid != myid:
+                nm = users.get(aid, {}).get("name")
+                if nm:
+                    return nm
+    except Exception:
+        return None
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return None
+
+
+def _add_new_rooms(chat_data, rooms, chatid, users):
+    """카톡이 목록(chatListInfo)에 아직 안 올린 새 방(chatLogs 파일만 있는)을 상대 이름으로 추가."""
+    myid = _cache.get("myid")
+    known = set(chatid.values())
+    now = time.time()
+    for f in os.listdir(chat_data):
+        if not (f.startswith("chatLogs_") and f.endswith(".edb")):
+            continue
+        try:
+            cid = int(f[len("chatLogs_"):-4])
+        except ValueError:
+            continue
+        if cid in known:
+            continue
+        try:
+            if now - os.path.getmtime(os.path.join(chat_data, f)) > 7 * 86400:
+                continue   # 최근 7일 안에 활동한 새 방만
+        except OSError:
+            continue
+        name = _peer_name(chat_data, cid, users, myid)
+        if not name or name in chatid:
+            continue
+        chatid[name] = cid
+        got = _latest_msg(chat_data, cid)
+        rooms.insert(0, {
+            "name": name, "type": "DirectChat",
+            "preview": ((got[0] if got else "") or "").replace("\n", " ")[:80],
+            "unread": 0, "time": _fmt(got[1]) if got else "",
+            "favorite": False, "muted": False, "image": "", "pinned": False,
+        })
 
 
 # ───────────── 방 메시지 (DB, 팝업 없이, 전 방) ─────────────
