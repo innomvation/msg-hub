@@ -338,6 +338,10 @@ _AUTO_SYS = (
     "쓸 때도 'ㅋㅋ' 2개로 고정하지 말고 웃긴 정도에 따라 개수를 유동적으로 조절하라"
     "(살짝=ㅋ, 보통=ㅋㅋㅋ, 빵터짐=ㅋㅋㅋㅋㅋㅋ). "
     "답장마다 길이·시작·표현에 변화를 줘라 — 어떤 답은 질문으로, 어떤 답은 짧게. "
+    "절대 같은 말·같은 문장·같은 약속·같은 주제를 반복하지 마라(앵무새 금지). "
+    "네가 이 대화에서 이미 한 말(특히 '낼 1시 서울역' 같은 약속)을 또 꺼내지 마라 — "
+    "대화 로그에 네가 보낸 답이 섞여 있어도 그걸 따라 하지 말고, 매 답은 직전과 완전히 다른 내용으로. "
+    "상대의 '가장 마지막' 메시지에만 새롭게 반응하라. "
     "같은 추임새를 연속으로 반복하지 말고 실제 사람처럼 매번 다르게 답해라. "
     "실제 한국인이 카톡 치듯 자연스럽게 써라: 번역체, 어색한 조사 조합, 불필요한 쉼표, "
     "지나치게 완성된 설명조 문장을 피하고 구어체로. 조사·주어는 자주 생략해도 되고, "
@@ -486,12 +490,19 @@ def _generate(log_text, style=None, examples=None, profile=None):
     return (r.stdout or "").strip()
 
 
-def _room_log(msgs):
-    """kakdb 메시지 리스트 → '[sender] [00:00] text' 로그(_generate가 파싱하는 형식)."""
-    return "\n".join(
-        "[" + (MY_NAME if m.get("mine") else (m.get("sender") or "상대")) + "] [00:00] " + m["text"]
-        for m in msgs if m.get("text")
-    )
+def _room_log(msgs, room=None):
+    """kakdb 메시지 리스트 → '[sender] [00:00] text' 로그(_generate가 파싱).
+    봇이 보낸 답(bot_sent 기록)은 제외 — 봇이 자기 답을 모범처럼 따라 반복(앵무새)하는 걸 막는다."""
+    bot = set(_bot_sent.get(room, [])) if room else set()
+    out = []
+    for m in msgs:
+        t = (m.get("text") or "").strip()
+        if not t:
+            continue
+        if m.get("mine") and t in bot:   # 봇이 이 방에 보낸 답은 로그에서 뺀다
+            continue
+        out.append("[" + (MY_NAME if m.get("mine") else (m.get("sender") or "상대")) + "] [00:00] " + m["text"])
+    return "\n".join(out)
 
 
 def _auto_loop(room, stop, style=None):
@@ -519,7 +530,7 @@ def _auto_loop(room, stop, style=None):
         if not msgs or msgs[-1].get("mine"):  # 마지막이 내 메시지면 답 안 함(상대가 보낸 것에만 반응)
             continue
         try:
-            reply = _generate(_room_log(msgs), style, examples, profile)
+            reply = _generate(_room_log(msgs, room), style, examples, profile)
         except Exception as e:
             print("[auto] LLM 실패:", e, flush=True)
             continue
