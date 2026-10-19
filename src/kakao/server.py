@@ -475,37 +475,48 @@ def _generate(log_text, style=None, examples=None, profile=None):
     return (r.stdout or "").strip()
 
 
+def _room_log(msgs):
+    """kakdb 메시지 리스트 → '[sender] [00:00] text' 로그(_generate가 파싱하는 형식)."""
+    return "\n".join(
+        "[" + (MY_NAME if m.get("mine") else (m.get("sender") or "상대")) + "] [00:00] " + m["text"]
+        for m in msgs if m.get("text")
+    )
+
+
 def _auto_loop(room, stop, style=None):
+    # 읽기는 DB로(클립보드·포커스·마우스 안 건드림). 답할 때만 UI(send)로 전송.
     examples = _my_style_examples(room) or _my_style_examples(_BASE_SOURCE)  # 그 방 예시 없으면 호연 예시
     profile = _profile_for(room)           # 방 개별 > 그룹 > 기본(호연) 순 말투 프로파일
+    if kakdb is None:
+        return
     try:
-        with _lock:
-            seen = set(kakao_lib.read_room(room, open_if_needed=False).splitlines())
+        last = kakdb.latest_sendat(room)
     except Exception:
-        seen = set()
+        last = 0
     while not stop.wait(4):
         try:
-            with _lock:
-                text = kakao_lib.read_room(room, open_if_needed=False)
+            cur = kakdb.latest_sendat(room)
         except Exception:
             continue
-        lines = text.splitlines()
-        new = [LINE_RE.match(l).groups() for l in lines if l not in seen and LINE_RE.match(l)]
-        seen = set(lines)
-        incoming = [g for g in new if g[0] != MY_NAME]
-        if not incoming:
+        if not cur or cur <= last:            # 새 메시지 없음
+            continue
+        last = cur
+        try:
+            msgs = kakdb.read_messages(room, limit=40) or []
+        except Exception:
+            continue
+        if not msgs or msgs[-1].get("mine"):  # 마지막이 내 메시지면 답 안 함(상대가 보낸 것에만 반응)
             continue
         try:
-            reply = _generate(text, style, examples, profile)
+            reply = _generate(_room_log(msgs), style, examples, profile)
         except Exception as e:
             print("[auto] LLM 실패:", e, flush=True)
             continue
         r = (reply or "").strip()
         if r.upper() == "SKIP":
-            # 봇이 답하면 안 되는 사안(돈·중요 결정 등) → 답 안 하고 '나와의 채팅'으로 알림
-            last = incoming[-1][2] if incoming else ""
+            lo = next((m["text"] for m in reversed(msgs) if not m.get("mine") and m.get("text")), "")
             try:
-                send(MY_NAME, f"[확인 요망] '{room}' 방에 직접 답할 메시지가 있어요: {last[:60]}")
+                send(MY_NAME, f"[확인 요망] '{room}' 방에 직접 답할 메시지가 있어요: {lo[:60]}")
             except Exception as e:
                 print("[auto] 알림 실패:", e, flush=True)
         elif r:
@@ -543,6 +554,62 @@ def auto_stop(room):
 
 def auto_on(room):
     return room in _auto
+
+
+# ───────────── 모바일 제어: '나와의 채팅'에 /봇 명령 ─────────────
+# 폰에서 나와의 채팅으로 "/봇 켜 서연" 등을 보내면 PC 서버가 읽어 봇을 켜고 끈다.
+def _handle_bot_command(msg):
+    parts = msg.split(None, 2)                       # ["/봇", "켜", "서연"]
+    act = parts[1] if len(parts) > 1 else ""
+    room = parts[2].strip() if len(parts) > 2 else ""
+    try:
+        if act in ("목록", "상태", "list"):
+            lst = ", ".join(_auto.keys()) or "(없음)"
+            send(MY_NAME, "🤖 켜진 방: " + lst)
+        elif act in ("켜", "on"):
+            if not room:
+                send(MY_NAME, "방 이름을 같이 적어줘 (예: /봇 켜 서연)")
+                return
+            auto_start(room)
+            send(MY_NAME, f"🤖 '{room}' 켰어요")
+        elif act in ("꺼", "off"):
+            if not room:
+                send(MY_NAME, "방 이름을 같이 적어줘 (예: /봇 꺼 서연)")
+                return
+            auto_stop(room)
+            send(MY_NAME, f"🤖 '{room}' 껐어요")
+        else:
+            send(MY_NAME, "사용법: /봇 켜 <방>, /봇 꺼 <방>, /봇 목록")
+    except Exception as e:
+        send(MY_NAME, f"🤖 실패: {e}")
+
+
+def _command_loop():
+    # 나와의 채팅 감시도 DB로(클립보드 안 씀). 마지막 메시지가 내가 보낸 /봇 명령이면 처리.
+    if kakdb is None:
+        return
+    time.sleep(6)
+    try:
+        last = kakdb.latest_sendat(MY_NAME)
+    except Exception:
+        last = 0
+    while True:
+        time.sleep(4)
+        try:
+            cur = kakdb.latest_sendat(MY_NAME)
+        except Exception:
+            continue
+        if not cur or cur <= last:
+            continue
+        last = cur
+        try:
+            msgs = kakdb.read_messages(MY_NAME, limit=5) or []
+        except Exception:
+            continue
+        if msgs and msgs[-1].get("mine"):
+            body = (msgs[-1].get("text") or "").strip()
+            if body.startswith("/봇"):
+                _handle_bot_command(body)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -705,5 +772,6 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
     threading.Thread(target=_poll_notifications, daemon=True).start()
     threading.Thread(target=_resume_active, daemon=True).start()
+    threading.Thread(target=_command_loop, daemon=True).start()   # 폰에서 나와의 채팅 /봇 명령
     print(f"[kakao-server] listening on 127.0.0.1:{port}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
