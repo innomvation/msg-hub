@@ -544,12 +544,18 @@ def auto_start(room, style=None):
     if style is not None:                       # 말투 지정이 왔으면 저장(다음에 기본값)
         _styles[room] = style
         _save_styles(_styles)
-    # 자동응답 켤 때 방이 닫혀있으면 백그라운드로 연다(최소화+포커스 복귀)
-    with _lock:
-        try:
-            _ensure_open_bg(room)
-        finally:
-            _release_input()
+    # 방이 이미 존재하면 백그라운드로 열어둔다. 아직 대화한 적 없는 상대(방 없음)는
+    # 열지 않고 등록만 — DB 감시가 상대의 첫 톡으로 방이 생기면 자동으로 답 시작한다.
+    has_room = bool(win32gui.FindWindow(None, room)) or \
+        (kakdb is not None and room in (kakdb._cache.get("chatid") or {}))
+    if has_room:
+        with _lock:
+            try:
+                _ensure_open_bg(room)
+            finally:
+                _release_input()
+    else:
+        print(f"[auto] '{room}' 방이 아직 없음 — 대기 등록(첫 톡 오면 답 시작)", flush=True)
     stop = threading.Event()
     _auto[room] = stop
     _save_active()
